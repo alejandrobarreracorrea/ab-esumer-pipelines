@@ -1,0 +1,47 @@
+# =====================================================================
+#  PIPE CENTRAL · APPLY  (se llama desde cada proyecto con "uses:")
+#  Corre en cada push a main: despliega lo que ya se revisó en el pull request.
+#  Entra a AWS sin llaves (OIDC) con el rol <proyecto>-apply: solo puede tocar
+#  recursos cuyo nombre empieza por <proyecto>-.
+# =====================================================================
+name: apply
+on:
+  workflow_call:
+    inputs:
+      proyecto: { type: string, required: true }
+      cuenta:   { type: string, required: true }
+      region:   { type: string, default: "us-east-1" }
+      carpeta:  { type: string, default: "terraform" }
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    concurrency: { group: "terraform-${{ inputs.proyecto }}", cancel-in-progress: false }
+    env:
+      TF_VAR_proyecto: ${{ inputs.proyecto }}
+      TF_IN_AUTOMATION: "1"
+    defaults:
+      run: { working-directory: "${{ inputs.carpeta }}" }
+    steps:
+      - name: ¿Está la variable AWS_ACCOUNT_ID?
+        if: inputs.cuenta == ''
+        run: |
+          echo "::error::Falta la variable AWS_ACCOUNT_ID: Settings → Secrets and variables → Actions → Variables"
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_wrapper: false }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ inputs.cuenta }}:role/${{ inputs.proyecto }}-apply
+          aws-region: ${{ inputs.region }}
+      - run: terraform init -input=false -backend-config="bucket=${{ inputs.proyecto }}-estado-${{ inputs.cuenta }}" -backend-config="region=${{ inputs.region }}"
+      - run: terraform apply -input=false -auto-approve -no-color -lock-timeout=120s
+      - name: Lo que quedó desplegado
+        run: |
+          {
+            echo "## 🚀 ${{ inputs.proyecto }} desplegado"
+            echo '```'
+            terraform output -no-color || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

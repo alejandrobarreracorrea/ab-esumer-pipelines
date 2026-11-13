@@ -1,0 +1,33 @@
+# =====================================================================
+#  PIPE CENTRAL · DESTROY  (se llama a mano: Actions → pipeline → Run workflow → destroy)
+#  Borra todo lo que el proyecto tiene en AWS. Lo dispara una persona, nunca solo.
+# =====================================================================
+name: destroy
+on:
+  workflow_call:
+    inputs:
+      proyecto: { type: string, required: true }
+      cuenta:   { type: string, required: true }
+      region:   { type: string, default: "us-east-1" }
+      carpeta:  { type: string, default: "terraform" }
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    concurrency: { group: "terraform-${{ inputs.proyecto }}", cancel-in-progress: false }
+    env:
+      TF_VAR_proyecto: ${{ inputs.proyecto }}
+      TF_IN_AUTOMATION: "1"
+    defaults:
+      run: { working-directory: "${{ inputs.carpeta }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_wrapper: false }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ inputs.cuenta }}:role/${{ inputs.proyecto }}-apply
+          aws-region: ${{ inputs.region }}
+      - run: terraform init -input=false -backend-config="bucket=${{ inputs.proyecto }}-estado-${{ inputs.cuenta }}" -backend-config="region=${{ inputs.region }}"
+      - run: terraform destroy -input=false -auto-approve -no-color -lock-timeout=120s
+      - run: echo "## 🧹 ${{ inputs.proyecto }} destruido. Falta el bootstrap, desde tu PC." >> "$GITHUB_STEP_SUMMARY"

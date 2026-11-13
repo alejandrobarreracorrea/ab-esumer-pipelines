@@ -1,0 +1,47 @@
+# =====================================================================
+#  PIPE CENTRAL · PLAN  (se llama desde cada proyecto con "uses:")
+#  Corre en cada pull request: muestra qué cambiaría en AWS, sin tocar nada.
+#  Entra a AWS sin llaves (OIDC) con el rol <proyecto>-plan: solo puede mirar.
+# =====================================================================
+name: plan
+on:
+  workflow_call:
+    inputs:
+      proyecto: { type: string, required: true, description: "El nombre del repo, en minúsculas (colegio-citas)" }
+      cuenta:   { type: string, required: true, description: "Tu número de cuenta de AWS (vars.AWS_ACCOUNT_ID)" }
+      region:   { type: string, default: "us-east-1" }
+      carpeta:  { type: string, default: "terraform" }
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    env:
+      TF_VAR_proyecto: ${{ inputs.proyecto }}
+      TF_IN_AUTOMATION: "1"
+    defaults:
+      run: { working-directory: "${{ inputs.carpeta }}" }
+    steps:
+      - name: ¿Está la variable AWS_ACCOUNT_ID?
+        if: inputs.cuenta == ''
+        run: |
+          echo "::error::Falta la variable AWS_ACCOUNT_ID: Settings → Secrets and variables → Actions → Variables"
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_wrapper: false }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ inputs.cuenta }}:role/${{ inputs.proyecto }}-plan
+          aws-region: ${{ inputs.region }}
+      - run: terraform init -input=false -backend-config="bucket=${{ inputs.proyecto }}-estado-${{ inputs.cuenta }}" -backend-config="region=${{ inputs.region }}"
+      - run: terraform validate
+      - name: terraform plan
+        run: |
+          terraform plan -input=false -no-color -lock-timeout=60s | tee plan.txt
+          {
+            echo "## 🔍 Plan de ${{ inputs.proyecto }}"
+            echo '```'
+            grep -E '^Plan:|No changes|^  # ' plan.txt || true
+            echo '```'
+            echo "Revisa el plan completo en el paso **terraform plan**. Si es lo que esperabas, haz merge."
+          } >> "$GITHUB_STEP_SUMMARY"
